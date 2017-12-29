@@ -1,4 +1,12 @@
+import java.util.Set;
+import java.util.HashSet;
+import java.security.PublicKey;
+import java.util.ArrayList;
+import java.util.Arrays;
+
 public class TxHandler {
+
+    UTXOPool utxoPool;
 
     /**
      * Creates a public ledger whose current UTXOPool (collection of unspent transaction outputs) is
@@ -6,7 +14,7 @@ public class TxHandler {
      * constructor.
      */
     public TxHandler(UTXOPool utxoPool) {
-        // IMPLEMENT THIS
+        this.utxoPool = new UTXOPool(utxoPool);
     }
 
     /**
@@ -19,7 +27,52 @@ public class TxHandler {
      *     values; and false otherwise.
      */
     public boolean isValidTx(Transaction tx) {
-        // IMPLEMENT THIS
+        Set<UTXO> utxos = new HashSet<UTXO>();
+
+        double total_output = 0;
+        for (Transaction.Output output : tx.getOutputs()) {
+            double val = output.value;
+            if (val <= 0) {
+                // (4) output values are non negative
+                return false;
+            }
+            total_output += val;
+        }
+
+        double total_input = 0;
+        int inputIndex = 0;
+        for (Transaction.Input input : tx.getInputs()) {
+            byte[] prevTxHash = input.prevTxHash;
+            int outputIndex = input.outputIndex;
+            UTXO utxo = new UTXO(prevTxHash, outputIndex);
+            if (utxos.contains(utxo)) {
+                // (3) all utxo are distincts
+                return false;
+            }
+            utxos.add(utxo);
+            Transaction.Output output = utxoPool.getTxOutput(utxo);
+            if (output == null) {
+                // (1) all outputs belong to the current UTXO pool
+                return false;
+            }
+
+            byte[] signature = input.signature;
+            PublicKey address = output.address;
+
+            byte[] message = tx.getRawDataToSign(inputIndex); 
+            inputIndex++;
+            if (!Crypto.verifySignature(address, message, signature)) {
+                return false; // (2)
+            }
+
+            total_input += output.value;
+        }
+
+        if (total_output > total_input) {
+            return false; // (5)
+        }
+
+        return true;
     }
 
     /**
@@ -28,7 +81,51 @@ public class TxHandler {
      * updating the current UTXO pool as appropriate.
      */
     public Transaction[] handleTxs(Transaction[] possibleTxs) {
-        // IMPLEMENT THIS
+
+        ArrayList<Transaction> mutuallyValidTransactions = new ArrayList<Transaction>();
+
+        boolean keepGoing = true;
+       
+        while (keepGoing) {
+
+            keepGoing = false;
+
+            for (Transaction candidate : possibleTxs) {
+                // we pick every transaction and check if 
+                // 1 - it is valid by itself
+                // 2 - mutually valid with transactions picked until this point
+                // 
+                // If candidate transaction is selected, its output operations
+                // are added to the current UTXO pool, and its input operations 
+                // are removed from the UTXO pool. It is important to update the 
+                // UTXO pool right after the transaction is selected because 
+                // subsequent transactions my refer to it.
+
+                if (!isValidTx(candidate)) {
+                    continue;
+                }
+                keepGoing = true;
+
+                mutuallyValidTransactions.add(candidate);
+
+                for (Transaction.Input input : candidate.getInputs()) {
+                    byte[] prevTxHash = input.prevTxHash;
+                    int outputIndex = input.outputIndex;
+                    UTXO utxo = new UTXO(prevTxHash, outputIndex);
+                    utxoPool.removeUTXO(utxo);
+                }
+
+                for (int outputIndex = 0; outputIndex < candidate.numOutputs(); outputIndex++) {
+                    Transaction.Output output = candidate.getOutput(outputIndex);
+                    UTXO utxo = new UTXO(candidate.getHash(), outputIndex);
+                    utxoPool.addUTXO(utxo, output);
+                }
+            }
+
+        }
+
+        Transaction[] res = new Transaction[mutuallyValidTransactions.size()];
+        return mutuallyValidTransactions.toArray(res);
     }
 
 }
